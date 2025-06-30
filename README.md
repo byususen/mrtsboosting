@@ -11,6 +11,7 @@ Global features over the full series and Interval-based weighted features from m
 - Integrates quality weights for robust feature extraction
 - Extracts full series features: weighted slope, period, entropy, power spectrum, and lag 1 autocorrelation
 - Extracts interval-based features: weighted median, IQR, MAD, Q1, and Q3
+- Supports direct conversion from sktime nested time series format to the required input dictionary structure
 - Scalable and parallelized using joblib and Numba
 - Powered by XGBoost for high-performance classification
 
