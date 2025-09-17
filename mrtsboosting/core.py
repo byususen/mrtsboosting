@@ -1,4 +1,3 @@
-#sync v1.2
 """
 MRTSBoost - Multivariate Robust Time Series Boosting
 
@@ -12,6 +11,7 @@ Date: 2025
 import time
 from joblib import Parallel, delayed
 import numpy as np
+import pandas as pd
 from xgboost import XGBClassifier
 from astropy.timeseries import LombScargle
 from numba import jit
