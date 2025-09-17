@@ -16,9 +16,12 @@ The method is tailored for multisensor satellite data, including optical and rad
 
 ## Installation
 
+Clone the repository and install the dependencies:
+
 ```bash
+git clone https://github.com/byususen/mrtsboosting.git
+cd mrtsboosting
 pip install -r requirements.txt
-```
 
 ## Usage Example
 
