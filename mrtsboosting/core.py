@@ -209,7 +209,6 @@ class MRTSBoostingClassifier:
         return global_feats
 
 
-
     def extract_features(self, x_data_dict, y_data_dict):
         """
         Extracts interval-based (local) and full-series (global) features from multivariate time series data.
@@ -397,7 +396,6 @@ class MRTSBoostingClassifier:
         return self._assemble_features(results, None, global_feat_dict)
 
 
-
     def fit(self, X, y=None, xgb_params=None):
         """Fit the MRTS-Boost model. Accepts nested DataFrame, 3D NumPy array, or dict format."""
     
@@ -424,8 +422,7 @@ class MRTSBoostingClassifier:
     
         # Extract features from input
         self.X_new, self.y_new = self.extract_features(x_data_dict, y_data_dict)
-    
-            
+                
         num_classes = len(np.unique(self.y_new))
         # Define default XGBoost parameters if not provided
         if xgb_params is None:
@@ -447,6 +444,7 @@ class MRTSBoostingClassifier:
     
         return self
 
+    
     def predict(self, X):
         """Predict using nested DataFrame, 3D NumPy array, or already grouped dict format."""
     
@@ -468,6 +466,7 @@ class MRTSBoostingClassifier:
     
         return self.label_encoder.inverse_transform(y_pred_encoded)
 
+    
     def _compute_local_features(self, sample_id, series_name, series_data, start, end, col_name):
         """Extract interval-based features including weighted stats and slope."""
         
@@ -529,8 +528,7 @@ class MRTSBoostingClassifier:
             'weighted_slope': slope_val
         }
 
-
-        
+    
     def _assemble_features(self, results, y_data_dict, global_feat_dict):
         """Assemble global and local features into final feature matrix."""
         
@@ -574,7 +572,7 @@ class MRTSBoostingClassifier:
     
         return X
 
-
+    
     def _convert_3d_numpy_to_dict(self, X_3d, y_array):
         """
         Convert a 3D NumPy array (n_instances × n_channels × n_timepoints)
@@ -627,66 +625,73 @@ class MRTSBoostingClassifier:
 
 
     @staticmethod
-    def from_sktime_nested(X_nested, y_array, time=None, weight=None):
-        """
-        Convert sktime nested format (UEA/UCR) to MRTSBoosting-compatible dictionaries.
-    
-        Parameters
-        ----------
-        X_nested : pd.DataFrame
-            sktime nested DataFrame where each cell contains a univariate pd.Series.
-        y_array : array-like
-            Labels for each instance.
-        time : dict or None
-            Optional dictionary of time values per VI and instance (e.g., time['vi_0'][i] = timepoints).
-        weight : dict or None
-            Optional dictionary of weights per VI and instance (e.g., weight['vi_0'][i] = weights).
+    def from_sktime_nested_uni(X_nested, y_array, id_prefix="id_", weight=None):
         
-        Returns
-        -------
-        x_data_dict : dict
-            Dictionary with keys: vi_0, vi_1, ..., each containing flattened 'id', 'time', 'value', 'weight'.
-        y_data_dict : dict
-            Dictionary with keys: 'id', 'label'.
-        """
-        x_data_dict = {}
-        n_samples = X_nested.shape[0]
-        sample_ids = np.array([f"id_{i}" for i in range(n_samples)])
-    
-        for i, col in enumerate(X_nested.columns):
-            vi_name = f"vi_{i}"
-            x_data_dict[vi_name] = {'id': [], 'time': [], 'value': [], 'weight': []}
-    
-            for j, series in enumerate(X_nested[col]):
-                values = series.values
-                length = len(values)
-    
-                x_data_dict[vi_name]['id'].extend([sample_ids[j]] * length)
-    
-                # Time steps
-                if time is not None and vi_name in time:
-                    time_values = time[vi_name][j]
-                else:
-                    time_values = np.arange(length)
-                x_data_dict[vi_name]['time'].extend(time_values)
-    
-                # Observed values
-                x_data_dict[vi_name]['value'].extend(values)
-    
-                # Weights
-                if weight is not None and vi_name in weight:
-                    weights = weight[vi_name][j]
-                else:
-                    weights = np.ones(length)
-                x_data_dict[vi_name]['weight'].extend(weights)
-    
-        y_data_dict = {
-            'id': sample_ids,
-            'label': np.array(y_array)
-        }
-    
-        return x_data_dict, y_data_dict
+        # 1) Check all series lengths (should all match)
+        lens = {len(s) for s in X_nested.iloc[:, 0]}
+        
+        # 2) Stack into a 2D float array
+        X_2d = np.vstack(
+            X_nested.iloc[:, 0].apply(lambda s: np.asarray(s, dtype=float)).to_numpy()
+        )
 
+        # Ensure class labels are 0-indexed
+        le = LabelEncoder()
+        y_array = le.fit_transform(y_array)
+        data = X_2d
+
+        # Generate IDs
+        n_samples, n_timestamps = data.shape
+        id_samples = [f"{id_prefix}{i+1}" for i in range(n_samples)]
+        id_times = np.arange(1, n_timestamps + 1)
+        
+        # Create the DataFrame
+        df = pd.DataFrame(data, index=id_samples, columns=id_times)
+        
+        # Melt to long format
+        X_df = df.reset_index().melt(id_vars='index', var_name='id_time', value_name='id_value')
+        X_df = X_df.rename(columns={'index': 'id_sample'})
+        # Sort by id_sample and id_time
+        X_df = X_df.sort_values(by=['id_sample', 'id_time'])
+
+        # Add weights if provided (otherwise default to 1)
+        if weight is not None:
+            weights_df = pd.DataFrame(weight, index=id_samples, columns=id_times)
+            weights_long = weights_df.reset_index().melt(id_vars='index', var_name='id_time', value_name='weight')
+            weights_long = weights_long.rename(columns={'index': 'id_sample'})
+            weights_long = weights_long.sort_values(by=['id_sample', 'id_time'])
+            X_df['weight'] = weights_long['weight'].values
+        else:
+            X_df['weight'] = 1.0
+        
+        x_data_dict = {
+            'signal': {
+                'id': X_df['id_sample'].values,
+                'time': X_df['id_time'].values,
+                'value': X_df['id_value'].values,
+                'weight': X_df['weight'].values
+            }
+        }
+
+        # === Example label array ===
+        labels = y_array
+        
+        # === Create corresponding id_sample ===
+        id_samples = [f"{id_prefix}{i+1}" for i in range(len(labels))]
+        
+        # === Create DataFrame ===
+        y_df = pd.DataFrame({
+            'id_sample': id_samples,
+            'label': labels
+        })
+        
+        # Sort by id_sample
+        y_df = y_df.sort_values(by=['id_sample'])
+        y_data_dict = {
+            'id': y_df['id_sample'].values,
+            'label': y_df['label'].values
+        }
+        return x_data_dict, y_data_dict
     
 
     def _get_period(self, time, value, weight, time_max):
@@ -746,4 +751,3 @@ class MRTSBoostingClassifier:
         except Exception as e:
             print(f"[WARN] _get_period exception: {e}")
             return self.min_period, 0.0
-
