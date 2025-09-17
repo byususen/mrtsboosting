@@ -1,19 +1,18 @@
 # MRTSBoosting: Multivariate Robust Time Series Boosting
 
-MRTSBoosting is a multivariate time series classification algorithm tailored for periodic data under noisy conditions. It incorporates a time series weighting strategy—such as CloudScore+—to handle data contamination (e.g., clouds in remote sensing) and ensures robust feature extraction. The method is designed to support multisource data with unequal time series lengths and temporal misalignment, which are common in satellite-derived vegetation indices for agricultural monitoring.
+MRTS-Boosting is a fast and robust time series classification (TSC) framework designed for noisy and temporally irregular data. It combines full-series and interval-based feature extraction with an XGBoost ensemble classifier, enabling accurate classification under challenging conditions such as cloud contamination and variable planting schedules.
 
-MRTSBoosting extracts both:
-Global features over the full series and Interval-based weighted features from multiple sensors, and uses XGBoost for high-performance classification.
+The method is tailored for multisensor satellite data, including optical and radar vegetation indices (VIs), which often differ in acquisition frequency and temporal alignment. By treating each VI as an independent series on its own temporal grid, MRTS-Boosting avoids the need for resampling while fully exploiting complementary information.
 
-## Features
+## Key Features
 
-- Handles multivariate time series with variable time stamps
-- Integrates quality weights for robust feature extraction
-- Extracts full series features: weighted slope, period, entropy, power spectrum, and lag 1 autocorrelation
-- Extracts interval-based features: weighted median, IQR, MAD, Q1, and Q3
-- Supports direct conversion from sktime nested time series format to the required input dictionary structure
-- Scalable and parallelized using joblib and Numba
-- Powered by XGBoost for high-performance classification
+- Handles multivariate, misaligned, and unequal-length time series (e.g., Sentinel-1 radar and Sentinel-2 optical VIs).
+- Quality-aware feature extraction using observation weights (e.g., CloudScore+) to mitigate noise such as cloud contamination.
+- Full-series features: weighted slope, dominant period and spectral power (Lomb–Scargle), entropy, and weighted lag-1 autocorrelation.
+- Interval-based features: weighted quartiles (Q1, median, Q3), IQR, MAD, and local slope, adaptively selected based on observation quality.
+- Scalable and efficient, with parallelized feature extraction using joblib and numba.
+- Seamless integration with sktime: direct conversion from nested time series format to the required input dictionary.
+- Powered by XGBoost for high-performance, regularized classification.
 
 ## Installation
 
@@ -30,12 +29,6 @@ model = MRTSBoostingClassifier(n_window=3, window_min=3)
 model.fit(x_data_dict_train, y_data_dict_train, time_weight=cloudscore_dict)
 y_pred = model.predict(x_data_dict_test)
 ```
-
-## Citation
-
-If you use this package in your research, please cite:
-
-Bayu Suseno et al., "Multivariate Robust Time Series Boosting for Remote Sensing-Based Ricefield Classification", 2025.
 
 ## License
 
