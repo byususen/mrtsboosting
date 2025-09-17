@@ -27,11 +27,38 @@ pip install -r requirements.txt
 ## Usage Example
 
 ```python
-from mrtsboosting import MRTSBoosting
+import numpy as np
+from sklearn.metrics import accuracy_score, cohen_kappa_score
+from sktime.datasets import load_UCR_UEA_dataset
 
-model = MRTSBoostingClassifier(n_window=3, window_min=3)
-model.fit(x_data_dict_train, y_data_dict_train, time_weight=cloudscore_dict)
-y_pred = model.predict(x_data_dict_test)
+#from mrtsboosting import MRTSBoostingClassifier
+
+# 1) Load UCR dataset (univariate, nested DataFrame)
+X_train, y_train = load_UCR_UEA_dataset("CBF", split="train", return_X_y=True)
+X_test,  y_test  = load_UCR_UEA_dataset("CBF", split="test",  return_X_y=True)
+
+# Ensure class labels are 0-indexed
+le = LabelEncoder()
+y_train = le.fit_transform(y_train)
+y_test = le.transform(y_test)
+
+# 2) Convert nested sktime format -> flat dicts (per your class helper)
+model = MRTSBoostingClassifier()
+x_train_flat, y_train_dict = model.from_sktime_nested_uni(X_train, y_train, id_prefix='train')
+x_test_flat,  y_test_dict  = model.from_sktime_nested_uni(X_test,  y_test, id_prefix='test')
+
+# 3) Group by sample id (what extract_features expects)
+x_train = model.preprocess_x_data_dict(x_train_flat)
+x_test  = model.preprocess_x_data_dict(x_test_flat)
+
+# 4) Fit & predict
+model.fit(x_train, y_train_dict)
+y_pred = model.predict(x_test)
+
+# 5) Evaluate
+acc = accuracy_score(y_test_dict["label"], y_pred)
+kappa = cohen_kappa_score(y_test_dict["label"], y_pred)
+print(f"[CBF] Accuracy: {acc:.3f} | Cohen’s κ: {kappa:.3f}")
 ```
 
 ## License
