@@ -22,6 +22,7 @@ Clone the repository and install the dependencies:
 git clone https://github.com/byususen/mrtsboosting.git
 cd mrtsboosting
 pip install -r requirements.txt
+```
 
 ## Usage Example
 
