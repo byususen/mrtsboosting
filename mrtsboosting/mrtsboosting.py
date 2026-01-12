@@ -19,7 +19,6 @@ from collections import defaultdict
 from pandas import DataFrame as PandasDataFrame
 from sklearn.preprocessing import LabelEncoder
 
-
 # ------------------------------
 # JIT-optimized weighted metrics
 # ------------------------------
@@ -111,7 +110,9 @@ class MRTSBoostingClassifier:
     """Multivariate Robust Time Series Boosting Class."""
 
     def __init__(self, n_window=None, window_min=None, window_max=None,
-                 min_period=None, max_period=None, tau=None, random_state=None, n_jobs=1):
+             min_period=None, max_period=None, tau=None,
+             sampling="adaptive", n_ensemble=5, random_state=None, n_jobs=1):
+
         self.model_name = "MRTSBoosting"
         self.n_window = n_window
         self.window_min = window_min
@@ -119,9 +120,28 @@ class MRTSBoostingClassifier:
         self.min_period = min_period
         self.max_period = max_period
         self.tau = tau
+    
+        self.sampling = sampling
+        if self.sampling not in ("adaptive", "random"):
+            raise ValueError("sampling must be 'adaptive' or 'random'")
+    
+        self.n_ensemble = int(n_ensemble)
+        if self.n_ensemble < 1:
+            raise ValueError("n_ensemble must be >= 1")
+    
         self.random_state = random_state
         self.n_jobs = n_jobs
 
+
+    def _interval_sampling_weights(self, w):
+        """
+        Return weights used for *interval selection/scoring*.
+        - adaptive: real weights
+        - random: all ones (same shape)
+        """
+        if (w is None) or (self.sampling == "adaptive"):
+            return w
+        return np.ones_like(w, dtype=np.float32)
 
     def preprocess_x_data_dict(self, x_data_dict):
         """
@@ -168,7 +188,6 @@ class MRTSBoostingClassifier:
         global_feats = {}
     
         for series_name, series_data in x_data_dict.items():
-            # No need to group, already grouped by sample ID
             for sample_id, data in series_data.items():
                 time = np.asarray(data['time'], dtype=np.float64)
                 value = np.asarray(data['value'], dtype=np.float64)
@@ -235,11 +254,9 @@ class MRTSBoostingClassifier:
         """
         idsamp_unique = np.unique(y_data_dict['id'])
 
-        # Extract median time series length for dynamic defaulting
         series_lengths = [len(s['time']) for vi_data in x_data_dict.values() for s in vi_data.values()]
         median_len = np.median(series_lengths)
         
-        # Set smart defaults if not provided
         if self.n_window is None:
             self.n_window = int(np.sqrt(median_len))
             print(f"[INFO] Auto-setting n_window = {self.n_window}")
@@ -251,9 +268,7 @@ class MRTSBoostingClassifier:
         if self.min_period is None:
             self.min_period = max(3, int(median_len * 0.1))
             print(f"[INFO] Auto-setting min_period = {self.min_period}")
-
     
-        # Determine global time range
         all_times = np.concatenate([entry['time'] for v in x_data_dict.values() for entry in v.values()])
         time_min, time_max = np.min(all_times), np.max(all_times)
         window_max = self.window_max if self.window_max is not None else time_max - time_min
@@ -271,8 +286,7 @@ class MRTSBoostingClassifier:
                     all_weights.extend(series_data[sid]['weight'].tolist())
             std_dev = np.std(all_weights) if len(all_weights) > 0 else 0
             vi_weight_fluctuation[vi_name] = 1 if std_dev > 1e-6 else 0
-        print("VI fluctuation flags:", vi_weight_fluctuation)
-
+        
         if self.tau is None:
             all_weights = []
             for vi_name, series_data in x_data_dict.items():
@@ -305,38 +319,34 @@ class MRTSBoostingClassifier:
                 max_start = time_max - win_len
                 start = self.rng.integers(time_min, max_start + 1)
                 end = start + win_len
-    
                 has_data = False
                 weights_all = []
     
                 for vi_name, series_data in x_data_dict.items():
-                    # Use fluctuating VIs if any exist, otherwise fallback to all
                     if (any(vi_weight_fluctuation.values()) and vi_weight_fluctuation.get(vi_name, 0) == 1) or \
                        (not any(vi_weight_fluctuation.values())):
                         for sid in idsamp_unique:
                             if sid in series_data:
                                 times = series_data[sid]['time']
                                 weights = series_data[sid]['weight']
+                                w_sel = self._interval_sampling_weights(weights)
                                 mask = (times >= start) & (times < end)
                                 if np.any(mask):
                                     has_data = True
-                                    weights_all.extend(weights[mask].tolist())
-    
+                                    weights_all.extend(w_sel[mask].tolist())
+   
                 if not has_data:
                     continue
     
                 mean_weight = np.mean(weights_all) if len(weights_all) > 0 else 0.0
     
                 if mean_weight >= prev_mean_weight:
-                    print(f"[ACCEPTED] Interval {i+1}: start={start}, length={win_len}, mean_weight={mean_weight:.3f} ≥ prev={prev_mean_weight:.3f}")
                     break
                 else:
                     prob_accept = np.exp((mean_weight - prev_mean_weight) / self.tau)
                     if self.rng.random() < prob_accept:
-                        print(f"[ACCEPTED with prob] Interval {i+1}: start={start}, length={win_len}, mean_weight={mean_weight:.3f} < prev={prev_mean_weight:.3f}, prob={prob_accept:.3f}")
                         break
                     else:
-                        print(f"[REJECTED] Interval {i+1}: start={start}, length={win_len}, mean_weight={mean_weight:.3f} < prev={prev_mean_weight:.3f}, prob={prob_accept:.3f}")
                         continue
     
             self.start_all.append(start)
@@ -361,22 +371,18 @@ class MRTSBoostingClassifier:
         return self._assemble_features(results, y_data_dict, global_feat_dict)
 
         
-    def extract_predict(self, x_data_dict):
+    def extract_predict(self, x_data_dict, feature_names=None):
         """Extract prediction features using shared intervals across all series."""
     
-        # Collect unique sample IDs from all variables
         idsamp_unique = np.unique(
             np.concatenate([list(series_data.keys()) for series_data in x_data_dict.values()])
         )
     
-        # Determine max time (for global features)
         all_times = np.concatenate([entry['time'] for v in x_data_dict.values() for entry in v.values()])
         time_max = np.max(all_times)
     
-        # Extract global features
         global_feat_dict = self.extract_global_features(x_data_dict, time_max)
     
-        # Extract local features using shared intervals
         tasks = []
         for j in range(len(self.start_all)):
             start = self.start_all[j]
@@ -387,44 +393,32 @@ class MRTSBoostingClassifier:
                 for id_val in series_data.keys():
                     tasks.append((id_val, series_name, series_data, start, end, col_name))
     
-        # Parallel local feature extraction
         results = Parallel(n_jobs=self.n_jobs, prefer="threads")(
             delayed(self._compute_local_features)(*args) for args in tasks
         )
         results = [r for r in results if r is not None]
     
-        return self._assemble_features(results, None, global_feat_dict)
+        return self._assemble_features(results, None, global_feat_dict, feature_names=feature_names)
 
 
     def fit(self, X, y=None, xgb_params=None):
         """Fit the MRTS-Boost model. Accepts nested DataFrame, 3D NumPy array, or dict format."""
     
         if isinstance(X, np.ndarray) and X.ndim == 3:
-            # Convert 3D NumPy to dict format
             x_data_dict, y_data_dict = self._convert_3d_numpy_to_dict(X, y)
-    
-            # 🛠 Structure is flat → group it
             x_data_dict = self.preprocess_x_data_dict(x_data_dict)
-                
+    
         elif isinstance(X, pd.DataFrame):
-            # Convert nested sktime DataFrame
             x_data_dict, y_data_dict = self.from_sktime_nested(X, y)
     
         else:
             x_data_dict, y_data_dict = X, y
     
-        # Encode class labels
         self.label_encoder = LabelEncoder()
         y_data_dict['label'] = self.label_encoder.fit_transform(y_data_dict['label'])
+        num_classes = len(np.unique(y_data_dict['label']))
     
-        # Set up reproducible random number generator
-        self.rng = np.random.default_rng(self.random_state)
-    
-        # Extract features from input
-        self.X_new, self.y_new = self.extract_features(x_data_dict, y_data_dict)
-                
-        num_classes = len(np.unique(self.y_new))
-        # Define default XGBoost parameters if not provided
+        # Default XGBoost params
         if xgb_params is None:
             xgb_params = {
                 'objective': 'multi:softmax',
@@ -438,17 +432,34 @@ class MRTSBoostingClassifier:
                 'random_state': self.random_state
             }
     
-        # Train the classifier
-        self.clf = XGBClassifier(**xgb_params)
-        self.clf.fit(self.X_new, self.y_new)
+        self.clfs_ = []
+        self.intervals_ = []         # list of (start_all, window_all)
+        self.feature_names_list_ = []  # list of feature-name lists
     
+        base_seed = 0 if self.random_state is None else int(self.random_state)
+    
+        for e in range(self.n_ensemble):
+            self.rng = np.random.default_rng(base_seed + e)
+    
+            X_new, y_new = self.extract_features(x_data_dict, y_data_dict)
+    
+            params_e = dict(xgb_params)
+            params_e['random_state'] = (base_seed + e) if params_e.get('random_state', None) is not None else (base_seed + e)
+    
+            clf = XGBClassifier(**params_e)
+            clf.fit(X_new, y_new)
+    
+            self.clfs_.append(clf)
+            self.intervals_.append((list(self.start_all), list(self.window_all)))
+            self.feature_names_list_.append(list(self.feature_names))
+    
+        self.clf = self.clfs_[0]
         return self
 
     
     def predict(self, X):
         """Predict using nested DataFrame, 3D NumPy array, or already grouped dict format."""
     
-        # Auto-detect input format
         if isinstance(X, np.ndarray) and X.ndim == 3:
             x_data_dict, _ = self._convert_3d_numpy_to_dict(X, y_array=np.zeros(X.shape[0]))
             x_data_dict = self.preprocess_x_data_dict(x_data_dict)
@@ -457,14 +468,32 @@ class MRTSBoostingClassifier:
             x_data_dict, _ = self.from_sktime_nested(X, y_array=np.zeros(X.shape[0]))
     
         else:
-            # X is assumed to already be a preprocessed grouped x_data_dict
             x_data_dict = X
     
-        # Predict encoded labels
-        X_features = self.extract_predict(x_data_dict)
-        y_pred_encoded = self.clf.predict(X_features)
+        if not hasattr(self, "clfs_") or len(self.clfs_) == 0:
+            X_features = self.extract_predict(x_data_dict)
+            y_pred_encoded = self.clf.predict(X_features)
+            return self.label_encoder.inverse_transform(y_pred_encoded)
     
-        return self.label_encoder.inverse_transform(y_pred_encoded)
+        preds = []
+        for clf, (starts, windows), feat_names in zip(self.clfs_, self.intervals_, self.feature_names_list_):
+            # use this member's intervals
+            self.start_all = starts
+            self.window_all = windows
+    
+            X_features = self.extract_predict(x_data_dict, feature_names=feat_names)
+            preds.append(clf.predict(X_features))
+    
+        preds = np.vstack(preds)  # shape: (k, n_samples)
+    
+        # Majority vote (multi-class)
+        n_samples = preds.shape[1]
+        y_vote = np.empty(n_samples, dtype=int)
+        for j in range(n_samples):
+            counts = np.bincount(preds[:, j].astype(int))
+            y_vote[j] = np.argmax(counts)
+    
+        return self.label_encoder.inverse_transform(y_vote)
 
     
     def _compute_local_features(self, sample_id, series_name, series_data, start, end, col_name):
@@ -529,9 +558,9 @@ class MRTSBoostingClassifier:
         }
 
     
-    def _assemble_features(self, results, y_data_dict, global_feat_dict):
+    def _assemble_features(self, results, y_data_dict, global_feat_dict, feature_names=None):
         """Assemble global and local features into final feature matrix."""
-        
+    
         feature_map = defaultdict(dict)
     
         # === Collect local features
@@ -541,7 +570,6 @@ class MRTSBoostingClassifier:
             feature_map[sample_id][f"{prefix}_wmedian"] = r['weighted_median']
             feature_map[sample_id][f"{prefix}_wmean"] = r['weighted_mean']
             feature_map[sample_id][f"{prefix}_wstd"] = r['weighted_std']
-
             feature_map[sample_id][f"{prefix}_wiqr"] = r['weighted_iqr']
             feature_map[sample_id][f"{prefix}_wq1"] = r['weighted_q1']
             feature_map[sample_id][f"{prefix}_wq3"] = r['weighted_q3']
@@ -554,7 +582,12 @@ class MRTSBoostingClassifier:
     
         # === Final list of sample IDs and features
         unique_ids = sorted(feature_map.keys())
-        all_feature_names = sorted({feat for feats in feature_map.values() for feat in feats})
+    
+        if feature_names is None:
+            all_feature_names = sorted({feat for feats in feature_map.values() for feat in feats})
+        else:
+            all_feature_names = list(feature_names)
+    
         self.feature_names = all_feature_names
     
         # === Build feature matrix X
@@ -571,7 +604,6 @@ class MRTSBoostingClassifier:
             return X[valid_mask], y[valid_mask]
     
         return X
-
     
     def _convert_3d_numpy_to_dict(self, X_3d, y_array):
         """
@@ -617,7 +649,6 @@ class MRTSBoostingClassifier:
             grouped[sid]['value'].append(flat_dict['value'][i])
             grouped[sid]['weight'].append(flat_dict['weight'][i])
     
-        # Convert to regular dict and ensure all values are NumPy arrays
         return {
             sid: {k: np.asarray(v) for k, v in series.items()}
             for sid, series in grouped.items()
@@ -635,26 +666,20 @@ class MRTSBoostingClassifier:
             X_nested.iloc[:, 0].apply(lambda s: np.asarray(s, dtype=float)).to_numpy()
         )
 
-        # Ensure class labels are 0-indexed
         le = LabelEncoder()
         y_array = le.fit_transform(y_array)
         data = X_2d
 
-        # Generate IDs
         n_samples, n_timestamps = data.shape
         id_samples = [f"{id_prefix}{i+1}" for i in range(n_samples)]
         id_times = np.arange(1, n_timestamps + 1)
         
-        # Create the DataFrame
         df = pd.DataFrame(data, index=id_samples, columns=id_times)
         
-        # Melt to long format
         X_df = df.reset_index().melt(id_vars='index', var_name='id_time', value_name='id_value')
         X_df = X_df.rename(columns={'index': 'id_sample'})
-        # Sort by id_sample and id_time
         X_df = X_df.sort_values(by=['id_sample', 'id_time'])
 
-        # Add weights if provided (otherwise default to 1)
         if weight is not None:
             weights_df = pd.DataFrame(weight, index=id_samples, columns=id_times)
             weights_long = weights_df.reset_index().melt(id_vars='index', var_name='id_time', value_name='weight')
@@ -673,19 +698,15 @@ class MRTSBoostingClassifier:
             }
         }
 
-        # === Example label array ===
         labels = y_array
         
-        # === Create corresponding id_sample ===
         id_samples = [f"{id_prefix}{i+1}" for i in range(len(labels))]
         
-        # === Create DataFrame ===
         y_df = pd.DataFrame({
             'id_sample': id_samples,
             'label': labels
         })
         
-        # Sort by id_sample
         y_df = y_df.sort_values(by=['id_sample'])
         y_data_dict = {
             'id': y_df['id_sample'].values,
