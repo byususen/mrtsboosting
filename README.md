@@ -1,24 +1,25 @@
 # 🌾 MRTSBoosting: Multivariate Robust Time Series Boosting
 
-MRTS-Boosting is a fast, noise-resistant, and highly flexible time series classification (TSC) framework designed to handle multivariate, irregular, and unequal-length satellite time series.
-It combines global (full-series) and local (interval-based) weighted features with an XGBoost classifier, enabling robust performance under difficult conditions such as:
+MRTS-Boosting is a quality-aware and computationally efficient time series classification (TSC) framework designed for multivariate, irregular, and unequal-length time series, with a particular focus on satellite-based agricultural monitoring.
 
-- cloud-contaminated optical observations,
-- temporally misaligned radar vs optical acquisition dates,
-- irregular sampling, missing values, and varying quality scores,
-- asynchronous crop growth phases or planting dates.
+The method combines global (full-series) and local (interval-based) time series features with an XGBoost classifier, enabling robust classification under realistic observational conditions such as:
 
-Originally designed for rice-field mapping using multisensor satellite vegetation indices, the framework is general and can be applied to any multivariate time-series classification task.
+- persistent cloud contamination in optical satellite data,
+- temporally misaligned acquisitions from multisensor platforms (e.g., Sentinel-1 SAR vs. Sentinel-2 optical),
+- irregular sampling, missing observations, and heterogeneous data quality,
+- asynchronous crop growth cycles and staggered planting schedules.
+
+Although originally developed for rice detection using multisensor vegetation indices, MRTS-Boosting is a general-purpose TSC framework applicable to a wide range of multivariate time series classification problems.
 
 ## 🔑 Key Features
 
-- Multivariate support with unequal length and misaligned timestamps (e.g., Sentinel-2 optical vs Sentinel-1 radar time series).
-- Quality-aware processing (e.g., CloudScore+ computed from STMS reconstruction or other quality metrics).
-- Full-series global features: weighted slope / trend, dominant period + spectral power (Lomb–Scargle), weighted entropy, weighted autocorrelation (lag-1).
-- Local interval-based features (adaptive interval selection): weighted median, Q1, Q3, weighted IQR, weighted MAD, local weighted slope. Intervals chosen based on quality weights to avoid cloudy / noisy segments.
-- Fast & scalable.
-- Flexible input formats: direct conversion from nested time series format to the required input dictionary.
-- Powered by XGBoost, enabling: strong performance on noisy data, multiclass classification, powerful built-in regularization.
+- Multivariate time series support with unequal lengths and unsynchronized timestamps (e.g., Sentinel-2 optical vs. Sentinel-1 radar observations).
+- Quality-aware feature construction, allowing explicit incorporation of observation reliability (e.g., CloudScore+, STMS-derived quality weights, or user-defined metrics).
+- Full-series (global) features, including: quality-weighted trend (slope), dominant period and spectral power via Lomb–Scargle periodogram, weighted entropy, weighted lag-1 autocorrelation.
+- Interval-based (local) features with adaptive interval selection: weighted quartiles (Q1, median, Q3), weighted interquartile range (IQR), weighted median absolute deviation (MAD), local weighted trend.
+- Fast and scalable, suitable for large-area satellite monitoring tasks.
+- Flexible input handling, including direct conversion from sktime nested time series format or structured dictionaries.
+- Powered by XGBoost.
 
 ## 📦 Installation
 
@@ -92,6 +93,7 @@ Example usage:
 ```python
 model = MRTSBoostingClassifier(
     random_state=123,
+    sampling="adaptive",
     n_jobs=-1
 )
 
